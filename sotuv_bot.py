@@ -285,6 +285,92 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+
+# ============ BOSHLANG'ICH MAHSULOTLAR (bir martalik seed) ============
+# Bu ro'yxat foydalanuvchining eski Excel hisobotidan olingan.
+# Format: (Nomi, Boshlang'ich, Sotilgan, Qoldiq, Narx)
+SEED_PRODUCTS = [
+    ("Сумка LP 19 золтой Шоколадный", 5, 1, 4, 379000),
+    ("Сумка LP 19 золтой Черный", 5, 2, 3, 379000),
+    ("Сумка LP 19 золтой Кремовый", 5, 2, 3, 379000),
+    ("Сумка LP 19 золтой Песочно-серый", 5, 3, 2, 379000),
+    ("Сумка LP 19 золтой Светло-синий", 5, 0, 5, 379000),
+    ("Сумка LP 19 золтой Электро-синий", 3, 0, 3, 379000),
+    ("Сумка LP 19 золтой Ночной-синий", 5, 0, 5, 379000),
+    ("Сумка LP 19 золтой Светло-зелёный", 5, 0, 5, 379000),
+    ("Сумка LP 19 золтой Розовый", 3, 1, 2, 379000),
+    ("Сумка LP 19 золтой Золотая-пальма", 3, 0, 3, 379000),
+    ("Сумка LP 19 золтой Слоновый пепел", 5, 0, 5, 379000),
+    ("Сумка LP 19 золтой Красное вино", 5, 2, 3, 379000),
+    ("Сумка LP 19 золтой Военно-Зелёный", 5, 3, 2, 379000),
+    ("Сумка LP 19 Cеребреный Черный", 5, 1, 4, 378000),
+    ("Сумка LP 19 Cеребреный Шоколадный", 5, 1, 4, 378000),
+    ("Сумка LP 19 Cеребреный Красное вино", 5, 0, 5, 378000),
+    ("Сумка LP 19 Cеребреный Золотая-пальма", 3, 1, 2, 378000),
+    ("Сумка LP 19 Cеребреный Кремовый", 5, 1, 4, 378000),
+    ("Сумка LP 19 Cеребреный Песочно-серый", 5, 2, 3, 378000),
+    ("Сумка LP 19 Cеребреный Розовый", 3, 1, 2, 378000),
+    ("Сумка LP 19 Cеребреный Светло-синий", 5, 1, 4, 378000),
+    ("Сумка LP 19 Cеребреный Светло-зелёный", 5, 0, 5, 378000),
+    ("Сумка LP 19 Cеребреный Серый слоновый", 5, 1, 4, 378000),
+    ("Сумка LP 19 Cеребреный Военно-Зелёный", 5, 3, 2, 378000),
+    ("Сумка LP 19 Cеребреный Ночной-синий", 5, 1, 4, 378000),
+    ("Сумка LP 19 Золотой с точкой Военно-Зелёный", 3, 0, 3, 380000),
+    ("Сумка LP 19 Золотой с точкой Песочно-серый", 3, 0, 3, 380000),
+    ("Сумка LP 19 Золотой с точкой Электро-синий", 3, 1, 2, 380000),
+    ("Сумка LP 19 Золотой с точкой Красное вино", 3, 3, 0, 380000),
+    ("Сумка LP 19 Золотой с точкой Шоколадный", 3, 0, 3, 380000),
+    ("Сумка LP 19 Золотой с точкой Розовый", 1, 0, 1, 380000),
+    ("Сумка LP 19 Золотой с точкой Кремовый", 2, 1, 1, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Военно-Зелёный", 3, 2, 1, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Песочно-серый", 3, 0, 3, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Электро-синий", 3, 1, 2, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Красное вино", 3, 0, 3, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Шоколадный", 3, 0, 3, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Розовый", 1, 1, 0, 380000),
+    ("Сумка LP 19 Cеребреный с точкой Кремовый", 2, 1, 1, 380000),
+    ("Сумка ALEX MIA CD-9358 Black", 28, 7, 21, 234000),
+    ("Сумка ALEX MIA CD-9358 Coffee", 6, 4, 2, 234000),
+    ("Сумка ALEX MIA CD-9358 Khkai", 6, 0, 6, 234000),
+    ("Сумка ALEX MIA CD-9358 Brown", 3, 3, 0, 234000),
+    ("Сумка ALEX MIA CD-9358 Wine", 4, 3, 1, 234000),
+    ("Сумка ALEX MIA CD-9358 Blue", 3, 3, 0, 234000),
+    ("Сумка ALEX MIA CD-9838 Black", 13, 2, 11, 350000),
+    ("Сумка ALEX MIA CD-9838 Coffee", 4, 0, 4, 350000),
+    ("Сумка ALEX MIA CD-9838 Brown", 2, 0, 2, 350000),
+    ("Сумка ALEX MIA CD-9838 Green", 2, 0, 2, 350000),
+    ("Сумка ALEX MIA CD-9838 Mud", 3, 0, 3, 350000),
+    ("Сумка ALEX MIA CD-9681 Black", 15, 0, 15, 315000),
+    ("Сумка ALEX MIA CD-9681 White", 3, 0, 3, 315000),
+    ("Сумка ALEX MIA CD-9681 Beige", 2, 1, 1, 315000),
+    ("Сумка ALEX MIA CD-9681 Grey", 3, 0, 3, 315000),
+    ("Сумка ALEX MIA CD-9681 Apricot", 1, 1, 0, 315000),
+    ("Сумка ALEX MIA CD-9681 Khkai", 8, 0, 8, 315000),
+    ("Сумка Balenciaga Черный", 5, 4, 1, 572000),
+    ("Сумка Balenciaga Шоколадный", 5, 5, 0, 572000),
+    ("Сумка Balenciaga Красное вино", 5, 1, 4, 572000),
+    ("Сумка LV Man Black", 15, 0, 15, 300000),
+    ("Сумка LV Man Blue", 5, 0, 5, 300000),
+
+]
+
+
+def seed_products_if_empty():
+    """Agar Mahsulotlar varag'i bo'sh bo'lsa (faqat sarlavha qatori bo'lsa),
+    eski Excel hisobotidan olingan boshlang'ich ro'yxatni avtomatik yozadi.
+    Bu faqat BIR MARTA, fayl yangi yaratilganda ishlaydi — keyingi ishga
+    tushirishlarda mahsulotlar allaqachon bor bo'lgani uchun qayta yozilmaydi."""
+    wb = load_workbook(EXCEL_FILE)
+    ws = wb["Mahsulotlar"]
+    if ws.max_row > 1:
+        return  # allaqachon mahsulotlar bor, qayta yozmaymiz
+    for nomi, boshlangich, sotilgan, qoldiq, narx in SEED_PRODUCTS:
+        ws.append([nomi, boshlangich, sotilgan, qoldiq, narx])
+    wb.save(EXCEL_FILE)
+    print(f"{len(SEED_PRODUCTS)} ta boshlang'ich mahsulot yuklandi.")
+
+
 def xodim_ismi(update: Update) -> str:
     user = update.effective_user
     return user.full_name or (f"@{user.username}" if user.username else str(user.id))
@@ -430,6 +516,7 @@ async def bekor(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     ensure_excel()
+    seed_products_if_empty()
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
