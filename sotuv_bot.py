@@ -163,6 +163,18 @@ def record_expense(xodim, nomi, summa):
     wb.save(EXCEL_FILE)
 
 
+def get_product_names():
+    ensure_excel()
+    wb = load_workbook(EXCEL_FILE)
+    ws = wb["Mahsulotlar"]
+    names = []
+    for row in range(2, ws.max_row + 1):
+        nomi = ws.cell(row=row, column=1).value
+        if nomi:
+            names.append(str(nomi))
+    return names
+
+
 def get_qoldiq_text():
     ensure_excel()
     wb = load_workbook(EXCEL_FILE)
@@ -396,15 +408,26 @@ async def sotuv_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
         return ConversationHandler.END
-    await update.message.reply_text(
-        "Qaysi mahsulot sotildi? (nomini yozing)", reply_markup=ReplyKeyboardRemove()
-    )
+
+    names = get_product_names()
+    if names:
+        # Mahsulotlarni 1 tadan qatorga joylab, tugma sifatida ko'rsatamiz
+        keyboard = [[n] for n in names]
+        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text(
+            "Qaysi mahsulot sotildi? Ro'yxatdan tanlang yoki qo'lda yozing:",
+            reply_markup=markup,
+        )
+    else:
+        await update.message.reply_text(
+            "Qaysi mahsulot sotildi? (nomini yozing)", reply_markup=ReplyKeyboardRemove()
+        )
     return PRODUCT
 
 
 async def sotuv_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mahsulot"] = update.message.text.strip()
-    await update.message.reply_text("Nechta dona sotildi?")
+    await update.message.reply_text("Nechta dona sotildi?", reply_markup=ReplyKeyboardRemove())
     return QTY
 
 
