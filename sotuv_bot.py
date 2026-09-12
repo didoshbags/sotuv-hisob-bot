@@ -388,6 +388,18 @@ def xodim_ismi(update: Update) -> str:
     return user.full_name or (f"@{user.username}" if user.username else str(user.id))
 
 
+# ============ ASOSIY MENYU (doim ko'rinib turadigan tugmalar) ============
+BTN_SOTUV = "🛒 Sotuv qo'shish"
+BTN_XARAJAT = "💸 Xarajat qo'shish"
+BTN_QOLDIK = "📦 Qoldiqni ko'rish"
+BTN_MAHSULOT = "➕ Yangi mahsulot"
+
+MAIN_MENU_MARKUP = ReplyKeyboardMarkup(
+    [[BTN_SOTUV, BTN_XARAJAT], [BTN_QOLDIK, BTN_MAHSULOT]],
+    resize_keyboard=True,
+)
+
+
 # ============ /start ============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
@@ -395,11 +407,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         "Assalomu alaykum! Men sotuv va xarajat hisobchi botiman.\n\n"
-        "/sotuv - yangi sotuvni yozish\n"
-        "/xarajat - yangi xarajatni yozish\n"
-        "/qoldik - qoldiqlarni ko'rish\n"
-        "/mahsulot - yangi mahsulot qo'shish\n"
-        "/bekor - amalni bekor qilish"
+        "Pastdagi tugmalardan foydalaning, yoki shunchaki\n"
+        "\"mahsulot nomi sotildi 1 ta narxi 380 ming\" deb yozing.",
+        reply_markup=MAIN_MENU_MARKUP,
     )
 
 
@@ -455,7 +465,8 @@ async def sotuv_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ Yozildi: {mahsulot} — {miqdor} dona x {narx:,.0f} so'm\n"
-        f"Qolgan qoldiq: {qoldiq:,.0f} dona"
+        f"Qolgan qoldiq: {qoldiq:,.0f} dona",
+        reply_markup=MAIN_MENU_MARKUP,
     )
     return ConversationHandler.END
 
@@ -483,7 +494,10 @@ async def xarajat_sum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return EXP_SUM
     xodim = xodim_ismi(update)
     record_expense(xodim, context.user_data["exp_nomi"], summa)
-    await update.message.reply_text(f"✅ Xarajat yozildi: {context.user_data['exp_nomi']} — {summa:,.0f} so'm")
+    await update.message.reply_text(
+        f"✅ Xarajat yozildi: {context.user_data['exp_nomi']} — {summa:,.0f} so'm",
+        reply_markup=MAIN_MENU_MARKUP,
+    )
     return ConversationHandler.END
 
 
@@ -519,7 +533,9 @@ async def mahsulot_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, faqat son kiriting.")
         return NEW_PRICE
     add_product(context.user_data["new_nomi"], context.user_data["new_qty"], narx)
-    await update.message.reply_text(f"✅ Mahsulot qo'shildi: {context.user_data['new_nomi']}")
+    await update.message.reply_text(
+        f"✅ Mahsulot qo'shildi: {context.user_data['new_nomi']}", reply_markup=MAIN_MENU_MARKUP
+    )
     return ConversationHandler.END
 
 
@@ -528,12 +544,12 @@ async def qoldik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
         return
-    await update.message.reply_text(get_qoldiq_text())
+    await update.message.reply_text(get_qoldiq_text(), reply_markup=MAIN_MENU_MARKUP)
 
 
 # ============ /bekor ============
 async def bekor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Bekor qilindi.", reply_markup=MAIN_MENU_MARKUP)
     return ConversationHandler.END
 
 
@@ -546,7 +562,10 @@ def main():
     app.add_handler(CommandHandler("qoldik", qoldik))
 
     sotuv_conv = ConversationHandler(
-        entry_points=[CommandHandler("sotuv", sotuv_start)],
+        entry_points=[
+            CommandHandler("sotuv", sotuv_start),
+            MessageHandler(filters.Text([BTN_SOTUV]), sotuv_start),
+        ],
         states={
             PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sotuv_product)],
             QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, sotuv_qty)],
@@ -556,7 +575,10 @@ def main():
     )
 
     xarajat_conv = ConversationHandler(
-        entry_points=[CommandHandler("xarajat", xarajat_start)],
+        entry_points=[
+            CommandHandler("xarajat", xarajat_start),
+            MessageHandler(filters.Text([BTN_XARAJAT]), xarajat_start),
+        ],
         states={
             EXP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, xarajat_name)],
             EXP_SUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, xarajat_sum)],
@@ -565,7 +587,10 @@ def main():
     )
 
     mahsulot_conv = ConversationHandler(
-        entry_points=[CommandHandler("mahsulot", mahsulot_start)],
+        entry_points=[
+            CommandHandler("mahsulot", mahsulot_start),
+            MessageHandler(filters.Text([BTN_MAHSULOT]), mahsulot_start),
+        ],
         states={
             NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, mahsulot_name)],
             NEW_QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, mahsulot_qty)],
@@ -573,6 +598,8 @@ def main():
         },
         fallbacks=[CommandHandler("bekor", bekor)],
     )
+
+    app.add_handler(MessageHandler(filters.Text([BTN_QOLDIK]), qoldik))
 
     app.add_handler(sotuv_conv)
     app.add_handler(xarajat_conv)
