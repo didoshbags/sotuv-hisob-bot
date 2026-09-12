@@ -42,11 +42,19 @@ Excel fayl 3 varaqdan iborat bo'ladi:
 import os
 import re
 import datetime
+from html import escape
 from openpyxl import Workbook, load_workbook
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     MessageHandler,
@@ -75,9 +83,9 @@ def is_allowed(update: Update) -> bool:
     return update.effective_user.id in ALLOWED_USERS
 
 # ConversationHandler holatlari
-PRODUCT, QTY, PRICE = range(3)
-EXP_NAME, EXP_SUM = range(3, 5)
-NEW_NAME, NEW_QTY, NEW_PRICE = range(5, 8)
+MODEL_STEP, PRODUCT, QTY, PRICE = range(4)
+EXP_NAME, EXP_SUM = range(4, 6)
+NEW_NAME, NEW_QTY, NEW_PRICE = range(6, 9)
 
 
 # ============ EXCEL YORDAMCHI FUNKSIYALAR ============
@@ -175,20 +183,55 @@ def get_product_names():
     return names
 
 
-def get_qoldiq_text():
+def group_products_by_model():
+    """Mahsulotlar varag'idagi har bir qatorni tegishli modelga ajratadi.
+    Natija: {model: [(rang, qoldiq, boshlangich), ...]}"""
     ensure_excel()
     wb = load_workbook(EXCEL_FILE)
     ws = wb["Mahsulotlar"]
-    lines = []
+
+    # Eng uzun nomdan boshlab tekshiramiz, shunda "LP 19 Cеребреный с точкой"
+    # "LP 19 Cеребреный" bilan aralashib ketmaydi.
+    models_by_len = sorted(MODEL_PREFIXES, key=len, reverse=True)
+
+    groups = {}
     for row in range(2, ws.max_row + 1):
         nomi = ws.cell(row=row, column=1).value
         if not nomi:
             continue
+        nomi = str(nomi)
+        boshlangich = ws.cell(row=row, column=2).value or 0
         qoldiq = ws.cell(row=row, column=4).value or 0
-        lines.append(f"• {nomi}: {qoldiq} dona")
-    if not lines:
-        return "Hozircha mahsulotlar ro'yxati bo'sh. /mahsulot buyrug'i bilan qo'shing."
-    return "📦 Joriy qoldiq:\n" + "\n".join(lines)
+
+        model = next((m for m in models_by_len if nomi.startswith(m)), None)
+        if model:
+            rang = nomi[len(model):].strip() or "-"
+        else:
+            model, rang = nomi, "-"
+
+        groups.setdefault(model, []).append((rang, qoldiq, boshlangich))
+    return groups
+
+
+def format_model_block(model, items):
+    width = max((len(r) for r, _, _ in items), default=4)
+    lines = [f"{model}"]
+    for rang, qoldiq, boshlangich in items:
+        lines.append(f"  {rang.ljust(width)}  {qoldiq}/{boshlangich}")
+    return "\n".join(lines)
+
+
+def get_qoldiq_models_markup():
+    """Har bir model uchun alohida tugma bilan inline klaviatura qaytaradi."""
+    groups = group_products_by_model()
+    order = [m for m in MODEL_DISPLAY_ORDER if m in groups] + [
+        m for m in groups if m not in MODEL_DISPLAY_ORDER
+    ]
+    buttons = [[InlineKeyboardButton(model, callback_data=f"qm:{model}")] for model in order]
+    return InlineKeyboardMarkup(buttons), groups
+
+
+
 
 
 # ============ ERKIN MATNNI TUSHUNISH (parser) ============
@@ -302,6 +345,33 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============ BOSHLANG'ICH MAHSULOTLAR (bir martalik seed) ============
 # Bu ro'yxat foydalanuvchining eski Excel hisobotidan olingan.
 # Format: (Nomi, Boshlang'ich, Sotilgan, Qoldiq, Narx)
+# Mahsulot nomlaridagi asosiy modellar ro'yxati — /qoldik'da guruhlash uchun ishlatiladi.
+MODEL_PREFIXES = [
+    "Сумка LP 19 золтой",
+    "Сумка LP 19 Cеребреный с точкой",
+    "Сумка LP 19 Cеребреный",
+    "Сумка LP 19 Золотой с точкой",
+    "Сумка ALEX MIA CD-9358",
+    "Сумка ALEX MIA CD-9838",
+    "Сумка ALEX MIA CD-9681",
+    "Сумка Balenciaga",
+    "Сумка LV Man",
+]
+
+
+# /qoldik tugmalarida ko'rsatish tartibi (foydalanuvchi belgilagan ketma-ketlik).
+MODEL_DISPLAY_ORDER = [
+    "Сумка LP 19 золтой",
+    "Сумка LP 19 Cеребреный",
+    "Сумка LP 19 Золотой с точкой",
+    "Сумка LP 19 Cеребреный с точкой",
+    "Сумка ALEX MIA CD-9358",
+    "Сумка ALEX MIA CD-9838",
+    "Сумка ALEX MIA CD-9681",
+    "Сумка Balenciaga",
+    "Сумка LV Man",
+]
+
 SEED_PRODUCTS = [
     ("Сумка LP 19 золтой Шоколадный", 5, 1, 4, 379000),
     ("Сумка LP 19 золтой Черный", 5, 2, 3, 379000),
@@ -414,29 +484,67 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============ /sotuv oqimi ============
+BTN_QOLDA_YOZISH = "✍️ Qo'lda yozish"
+
+
 async def sotuv_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
         return ConversationHandler.END
 
+    context.user_data.pop("model", None)
     names = get_product_names()
-    if names:
-        # Mahsulotlarni 1 tadan qatorga joylab, tugma sifatida ko'rsatamiz
-        keyboard = [[n] for n in names]
+    # Faqat mavjud mahsulotlarda ishlatilgan modellarni ko'rsatamiz, tartib
+    # MODEL_DISPLAY_ORDER ro'yxatidagi ketma-ketlikda (ya'ni Excel'dagi tartibda).
+    used_models = [m for m in MODEL_DISPLAY_ORDER if any(n.startswith(m) for n in names)]
+
+    if used_models:
+        keyboard = [[m] for m in used_models] + [[BTN_QOLDA_YOZISH]]
         markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text("Qaysi model sotildi?", reply_markup=markup)
+        return MODEL_STEP
+
+    await update.message.reply_text(
+        "Qaysi mahsulot sotildi? (nomini yozing)", reply_markup=ReplyKeyboardRemove()
+    )
+    return PRODUCT
+
+
+async def sotuv_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+
+    if text == BTN_QOLDA_YOZISH:
         await update.message.reply_text(
-            "Qaysi mahsulot sotildi? Ro'yxatdan tanlang yoki qo'lda yozing:",
-            reply_markup=markup,
+            "Mahsulot nomini yozing:", reply_markup=ReplyKeyboardRemove()
         )
-    else:
-        await update.message.reply_text(
-            "Qaysi mahsulot sotildi? (nomini yozing)", reply_markup=ReplyKeyboardRemove()
-        )
+        return PRODUCT
+
+    model = next((m for m in MODEL_DISPLAY_ORDER if m == text), None)
+    if model is None:
+        await update.message.reply_text("Iltimos, ro'yxatdan tanlang.")
+        return MODEL_STEP
+
+    context.user_data["model"] = model
+    names = get_product_names()
+    colors = [n[len(model):].strip() for n in names if n.startswith(model)]
+    colors = [c for c in colors if c]  # bo'sh bo'lmaganlari
+
+    if colors:
+        keyboard = [[c] for c in colors]
+        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text("Qaysi rang?", reply_markup=markup)
+        return PRODUCT
+
+    await update.message.reply_text(
+        "Rangini yozing:", reply_markup=ReplyKeyboardRemove()
+    )
     return PRODUCT
 
 
 async def sotuv_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["mahsulot"] = update.message.text.strip()
+    text = update.message.text.strip()
+    model = context.user_data.get("model")
+    context.user_data["mahsulot"] = f"{model} {text}" if model else text
     await update.message.reply_text("Nechta dona sotildi?", reply_markup=ReplyKeyboardRemove())
     return QTY
 
@@ -544,7 +652,31 @@ async def qoldik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
         return
-    await update.message.reply_text(get_qoldiq_text(), reply_markup=MAIN_MENU_MARKUP)
+    markup, groups = get_qoldiq_models_markup()
+    if not groups:
+        await update.message.reply_text(
+            "Hozircha mahsulotlar ro'yxati bo'sh. /mahsulot buyrug'i bilan qo'shing.",
+            reply_markup=MAIN_MENU_MARKUP,
+        )
+        return
+    await update.message.reply_text(
+        "📦 Qaysi modelning qoldig'ini ko'rmoqchisiz?", reply_markup=markup
+    )
+
+
+async def qoldik_model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+    model = query.data[len("qm:"):]
+    groups = group_products_by_model()
+    items = groups.get(model)
+    if not items:
+        await query.message.reply_text("Bu model uchun ma'lumot topilmadi.")
+        return
+    text = format_model_block(model, items)
+    await query.message.reply_text("<pre>" + escape(text) + "</pre>", parse_mode="HTML")
 
 
 # ============ /bekor ============
@@ -560,6 +692,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("qoldik", qoldik))
+    app.add_handler(CallbackQueryHandler(qoldik_model_callback, pattern=r"^qm:"))
 
     sotuv_conv = ConversationHandler(
         entry_points=[
@@ -567,6 +700,7 @@ def main():
             MessageHandler(filters.Text([BTN_SOTUV]), sotuv_start),
         ],
         states={
+            MODEL_STEP: [MessageHandler(filters.TEXT & ~filters.COMMAND, sotuv_model)],
             PRODUCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sotuv_product)],
             QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, sotuv_qty)],
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, sotuv_price)],
