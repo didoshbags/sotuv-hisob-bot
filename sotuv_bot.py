@@ -183,6 +183,138 @@ def get_product_names():
     return names
 
 
+def _parse_sana(sana_str):
+    try:
+        return datetime.datetime.strptime(sana_str, "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return datetime.datetime.min
+
+
+def undo_last_action():
+    """Eng oxirgi yozilgan sotuv yoki xarajatni bekor qiladi (o'chiradi).
+    Sotuv bo'lsa — mahsulot qoldig'ini ham qaytaradi.
+    Natija: tavsif matni (string) yoki None (bekor qilinadigan narsa topilmasa)."""
+    ensure_excel()
+    wb = load_workbook(EXCEL_FILE)
+    ws_s = wb["Sotuvlar"]
+    ws_x = wb["Xarajatlar"]
+    ws_m = wb["Mahsulotlar"]
+
+    last_sale = None
+    if ws_s.max_row > 1:
+        row = ws_s.max_row
+        last_sale = (row, [ws_s.cell(row=row, column=c).value for c in range(1, 7)])
+
+    last_exp = None
+    if ws_x.max_row > 1:
+        row = ws_x.max_row
+        last_exp = (row, [ws_x.cell(row=row, column=c).value for c in range(1, 5)])
+
+    if not last_sale and not last_exp:
+        return None
+
+    sale_time = _parse_sana(last_sale[1][0]) if last_sale else datetime.datetime.min
+    exp_time = _parse_sana(last_exp[1][0]) if last_exp else datetime.datetime.min
+
+    if sale_time >= exp_time:
+        row, (sana, xodim, mahsulot, miqdor, narx, summa) = last_sale
+        ws_s.delete_rows(row)
+        prow = find_product_row(ws_m, mahsulot)
+        if prow:
+            sotilgan = (ws_m.cell(row=prow, column=3).value or 0) - miqdor
+            boshlangich = ws_m.cell(row=prow, column=2).value or 0
+            ws_m.cell(row=prow, column=3, value=sotilgan)
+            ws_m.cell(row=prow, column=4, value=boshlangich - sotilgan)
+        wb.save(EXCEL_FILE)
+        return f"🗑 Bekor qilindi: {mahsulot} — {miqdor} dona x {narx:,.0f} so'm ({xodim})"
+    else:
+        row, (sana, xodim, nomi, summa) = last_exp
+        ws_x.delete_rows(row)
+        wb.save(EXCEL_FILE)
+        return f"🗑 Bekor qilindi: xarajat — {nomi} — {summa:,.0f} so'm ({xodim})"
+
+
+def get_report_for_date(date_str):
+    """Berilgan sana (YYYY-MM-DD) uchun sotuvlar va xarajatlar hisobotini tayyorlaydi."""
+    ensure_excel()
+    wb = load_workbook(EXCEL_FILE)
+    ws_s = wb["Sotuvlar"]
+    ws_x = wb["Xarajatlar"]
+
+    sotuvlar = []
+    for row in range(2, ws_s.max_row + 1):
+        sana = ws_s.cell(row=row, column=1).value
+        if sana and str(sana).startswith(date_str):
+            sotuvlar.append([ws_s.cell(row=row, column=c).value for c in range(1, 7)])
+
+    xarajatlar = []
+    for row in range(2, ws_x.max_row + 1):
+        sana = ws_x.cell(row=row, column=1).value
+        if sana and str(sana).startswith(date_str):
+            xarajatlar.append([ws_x.cell(row=row, column=c).value for c in range(1, 5)])
+
+    lines = [f"📅 <b>{date_str}</b> uchun hisobot:\n"]
+
+    if sotuvlar:
+        jami_dona = sum(s[3] for s in sotuvlar)
+        jami_summa = sum(s[5] for s in sotuvlar)
+        lines.append(f"🛒 <b>Sotuvlar</b> — {len(sotuvlar)} ta yozuv, jami {jami_dona:,.0f} dona, {jami_summa:,.0f} so'm:")
+        for sana, xodim, mahsulot, miqdor, narx, summa in sotuvlar:
+            vaqt = str(sana).split(" ")[-1] if " " in str(sana) else ""
+            lines.append(f"  {vaqt}  {mahsulot} — {miqdor} dona x {narx:,.0f} = {summa:,.0f} so'm ({xodim})")
+    else:
+        lines.append("🛒 Sotuvlar: bu kunda yozuv yo'q")
+
+    lines.append("")
+
+    if xarajatlar:
+        jami_x = sum(x[3] for x in xarajatlar)
+        lines.append(f"💸 <b>Xarajatlar</b> — {len(xarajatlar)} ta yozuv, jami {jami_x:,.0f} so'm:")
+        for sana, xodim, nomi, summa in xarajatlar:
+            vaqt = str(sana).split(" ")[-1] if " " in str(sana) else ""
+            lines.append(f"  {vaqt}  {nomi} — {summa:,.0f} so'm ({xodim})")
+    else:
+        lines.append("💸 Xarajatlar: bu kunda yozuv yo'q")
+
+    text = "\n".join(lines)
+    return text
+
+
+def get_report_date_markup():
+    """Oxirgi 7 kun uchun tugmalar + 'boshqa sana' tugmasi."""
+    today = datetime.date.today()
+    buttons = []
+    for i in range(7):
+        d = today - datetime.timedelta(days=i)
+        label = "Bugun" if i == 0 else ("Kecha" if i == 1 else d.strftime("%d.%m"))
+        buttons.append([InlineKeyboardButton(label, callback_data=f"rep:{d.isoformat()}")])
+    buttons.append([InlineKeyboardButton("✍️ Boshqa sana yozish", callback_data="rep:custom")])
+    return InlineKeyboardMarkup(buttons)
+
+
+DATE_PATTERNS = [
+    (r"^(\d{4})-(\d{1,2})-(\d{1,2})$", lambda m: (int(m[1]), int(m[2]), int(m[3]))),
+    (r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", lambda m: (int(m[3]), int(m[2]), int(m[1]))),
+    (r"^(\d{1,2})\.(\d{1,2})$", lambda m: (datetime.date.today().year, int(m[2]), int(m[1]))),
+    (r"^(\d{1,2})/(\d{1,2})/(\d{4})$", lambda m: (int(m[3]), int(m[2]), int(m[1]))),
+]
+
+
+def parse_date_text(text):
+    """'07.09', '07.09.2026', '2026-09-07' kabi matnlarni sanaga aylantiradi.
+    Muvaffaqiyatsiz bo'lsa None qaytaradi."""
+    t = text.strip()
+    for pattern, extractor in DATE_PATTERNS:
+        m = re.match(pattern, t)
+        if m:
+            try:
+                year, month, day = extractor(m)
+                return datetime.date(year, month, day)
+            except ValueError:
+                return None
+    return None
+
+
 def group_products_by_model():
     """Mahsulotlar varag'idagi har bir qatorni tegishli modelga ajratadi.
     Natija: {model: [(rang, qoldiq, boshlangich), ...]}"""
@@ -463,9 +595,10 @@ BTN_SOTUV = "🛒 Sotuv qo'shish"
 BTN_XARAJAT = "💸 Xarajat qo'shish"
 BTN_QOLDIK = "📦 Qoldiqni ko'rish"
 BTN_MAHSULOT = "➕ Yangi mahsulot"
+BTN_UNDO = "↩️ Oxirgisini bekor qilish"
 
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(
-    [[BTN_SOTUV, BTN_XARAJAT], [BTN_QOLDIK, BTN_MAHSULOT]],
+    [[BTN_SOTUV, BTN_XARAJAT], [BTN_QOLDIK, BTN_MAHSULOT], [BTN_UNDO]],
     resize_keyboard=True,
 )
 
@@ -685,6 +818,20 @@ async def bekor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ============ Oxirgi yozuvni bekor qilish (o'chirish) ============
+async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
+        return
+    natija = undo_last_action()
+    if natija is None:
+        await update.message.reply_text(
+            "Bekor qilinadigan yozuv topilmadi.", reply_markup=MAIN_MENU_MARKUP
+        )
+    else:
+        await update.message.reply_text(natija, reply_markup=MAIN_MENU_MARKUP)
+
+
 def main():
     ensure_excel()
     seed_products_if_empty()
@@ -734,6 +881,8 @@ def main():
     )
 
     app.add_handler(MessageHandler(filters.Text([BTN_QOLDIK]), qoldik))
+    app.add_handler(MessageHandler(filters.Text([BTN_UNDO]), undo_handler))
+    app.add_handler(CommandHandler("oxirgisini_bekor", undo_handler))
 
     app.add_handler(sotuv_conv)
     app.add_handler(xarajat_conv)
