@@ -444,6 +444,10 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Foydalanuvchi komandasiz, bitta xabar bilan sotuv/xarajat yozganda ishlaydi."""
     if not is_allowed(update):
         return  # ruxsatsiz odamga hatto javob ham bermaymiz
+
+    if await hisobot_by_text(update, context):
+        return
+
     text = update.message.text
     xodim = xodim_ismi(update)
 
@@ -596,9 +600,10 @@ BTN_XARAJAT = "💸 Xarajat qo'shish"
 BTN_QOLDIK = "📦 Qoldiqni ko'rish"
 BTN_MAHSULOT = "➕ Yangi mahsulot"
 BTN_UNDO = "↩️ Oxirgisini bekor qilish"
+BTN_HISOBOT = "📊 Hisobot (sana bo'yicha)"
 
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(
-    [[BTN_SOTUV, BTN_XARAJAT], [BTN_QOLDIK, BTN_MAHSULOT], [BTN_UNDO]],
+    [[BTN_SOTUV, BTN_XARAJAT], [BTN_QOLDIK, BTN_MAHSULOT], [BTN_HISOBOT, BTN_UNDO]],
     resize_keyboard=True,
 )
 
@@ -832,6 +837,55 @@ async def undo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(natija, reply_markup=MAIN_MENU_MARKUP)
 
 
+# ============ Hisobot (sana bo'yicha) ============
+async def hisobot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
+        return
+    context.user_data.pop("awaiting_report_date", None)
+    await update.message.reply_text(
+        "Qaysi sana uchun hisobot kerak?", reply_markup=get_report_date_markup()
+    )
+
+
+async def hisobot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return
+
+    data = query.data[len("rep:"):]
+    if data == "custom":
+        context.user_data["awaiting_report_date"] = True
+        await query.message.reply_text(
+            "Sanani yozing, masalan: 07.09 yoki 07.09.2026"
+        )
+        return
+
+    await query.message.reply_text(get_report_for_date(data), parse_mode="HTML")
+
+
+async def hisobot_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """context.user_data'da 'awaiting_report_date' bo'lsa, xabarni sana sifatida
+    o'qishga urinadi. Agar shu holatda ishlagan bo'lsa True qaytaradi (handle_free_text
+    davom etmasligi uchun), aks holda False."""
+    if not context.user_data.get("awaiting_report_date"):
+        return False
+
+    sana = parse_date_text(update.message.text)
+    if sana is None:
+        await update.message.reply_text(
+            "Sanani tushunmadim. Masalan: 07.09 yoki 07.09.2026 deb yozing."
+        )
+        return True
+
+    context.user_data.pop("awaiting_report_date", None)
+    await update.message.reply_text(
+        get_report_for_date(sana.isoformat()), parse_mode="HTML", reply_markup=MAIN_MENU_MARKUP
+    )
+    return True
+
+
 def main():
     ensure_excel()
     seed_products_if_empty()
@@ -883,6 +937,9 @@ def main():
     app.add_handler(MessageHandler(filters.Text([BTN_QOLDIK]), qoldik))
     app.add_handler(MessageHandler(filters.Text([BTN_UNDO]), undo_handler))
     app.add_handler(CommandHandler("oxirgisini_bekor", undo_handler))
+    app.add_handler(MessageHandler(filters.Text([BTN_HISOBOT]), hisobot_start))
+    app.add_handler(CommandHandler("hisobot", hisobot_start))
+    app.add_handler(CallbackQueryHandler(hisobot_callback, pattern=r"^rep:"))
 
     app.add_handler(sotuv_conv)
     app.add_handler(xarajat_conv)
