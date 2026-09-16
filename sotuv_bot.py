@@ -42,6 +42,7 @@ Excel fayl 3 varaqdan iborat bo'ladi:
 import os
 import re
 import datetime
+from zoneinfo import ZoneInfo
 from html import escape
 from openpyxl import Workbook, load_workbook
 
@@ -363,6 +364,35 @@ def get_qoldiq_models_markup():
     return InlineKeyboardMarkup(buttons), groups
 
 
+# Nechta va undan kam qolganda "kam qolgan" hisoblanadi. Xohlasangiz
+# Railway'da LOW_STOCK_THRESHOLD nomli environment variable orqali o'zgartirish mumkin.
+LOW_STOCK_THRESHOLD = int(os.environ.get("LOW_STOCK_THRESHOLD", "2"))
+
+
+def get_low_stock_text():
+    """Qoldig'i LOW_STOCK_THRESHOLD dan kam yoki teng bo'lgan mahsulotlarni,
+    model bo'yicha guruhlab qaytaradi."""
+    groups = group_products_by_model()
+    order = [m for m in MODEL_DISPLAY_ORDER if m in groups] + [
+        m for m in groups if m not in MODEL_DISPLAY_ORDER
+    ]
+
+    blocks = []
+    for model in order:
+        kam = [(r, q, b) for r, q, b in groups[model] if q <= LOW_STOCK_THRESHOLD]
+        if kam:
+            blocks.append(format_model_block(model, kam))
+
+    if not blocks:
+        return f"✅ Hozircha {LOW_STOCK_THRESHOLD} tadan kam qolgan mahsulot yo'q."
+
+    text = "\n\n".join(blocks)
+    return (
+        f"⚠️ <b>Kam qolgan mahsulotlar</b> ({LOW_STOCK_THRESHOLD} tadan kam, qoldiq/boshlang'ich):\n"
+        + "<pre>" + escape(text) + "</pre>"
+    )
+
+
 
 
 
@@ -462,9 +492,13 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sale:
         mahsulot, miqdor, narx = sale
         qoldiq = record_sale(xodim, mahsulot, miqdor, narx)
+        ogohlantirish = (
+            f"\n\n⚠️ Diqqat! Faqat {qoldiq:,.0f} dona qoldi."
+            if qoldiq <= LOW_STOCK_THRESHOLD else ""
+        )
         await update.message.reply_text(
             f"✅ Yozildi: {mahsulot} — {miqdor:,.0f} dona x {narx:,.0f} so'm\n"
-            f"Qolgan qoldiq: {qoldiq:,.0f} dona"
+            f"Qolgan qoldiq: {qoldiq:,.0f} dona{ogohlantirish}"
         )
         return
 
@@ -601,9 +635,15 @@ BTN_QOLDIK = "📦 Qoldiqni ko'rish"
 BTN_MAHSULOT = "➕ Yangi mahsulot"
 BTN_UNDO = "↩️ Oxirgisini bekor qilish"
 BTN_HISOBOT = "📊 Hisobot (sana bo'yicha)"
+BTN_KAM_QOLDIQ = "⚠️ Kam qolgan mahsulotlar"
 
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(
-    [[BTN_SOTUV, BTN_XARAJAT], [BTN_QOLDIK, BTN_MAHSULOT], [BTN_HISOBOT, BTN_UNDO]],
+    [
+        [BTN_SOTUV, BTN_XARAJAT],
+        [BTN_QOLDIK, BTN_MAHSULOT],
+        [BTN_HISOBOT, BTN_KAM_QOLDIQ],
+        [BTN_UNDO],
+    ],
     resize_keyboard=True,
 )
 
@@ -708,10 +748,14 @@ async def sotuv_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     miqdor = context.user_data["miqdor"]
     xodim = xodim_ismi(update)
     qoldiq = record_sale(xodim, mahsulot, miqdor, narx)
+    ogohlantirish = (
+        f"\n\n⚠️ Diqqat! Faqat {qoldiq:,.0f} dona qoldi."
+        if qoldiq <= LOW_STOCK_THRESHOLD else ""
+    )
 
     await update.message.reply_text(
         f"✅ Yozildi: {mahsulot} — {miqdor} dona x {narx:,.0f} so'm\n"
-        f"Qolgan qoldiq: {qoldiq:,.0f} dona",
+        f"Qolgan qoldiq: {qoldiq:,.0f} dona{ogohlantirish}",
         reply_markup=MAIN_MENU_MARKUP,
     )
     return ConversationHandler.END
@@ -886,6 +930,32 @@ async def hisobot_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return True
 
 
+# ============ Kam qolgan mahsulotlar ============
+async def kam_qoldiq_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
+        return
+    await update.message.reply_text(
+        get_low_stock_text(), parse_mode="HTML", reply_markup=MAIN_MENU_MARKUP
+    )
+
+
+# ============ Kunlik avtomatik hisobot ============
+async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
+    """Har kuni belgilangan vaqtda barcha ruxsat berilgan foydalanuvchilarga
+    o'sha kunning hisobotini avtomatik yuboradi."""
+    today = datetime.date.today().isoformat()
+    text = get_report_for_date(today)
+    kam = get_low_stock_text()
+    full_text = text + "\n\n" + kam
+
+    for uid in ALLOWED_USERS:
+        try:
+            await context.bot.send_message(chat_id=uid, text=full_text, parse_mode="HTML")
+        except Exception as e:
+            print(f"Kunlik hisobotni {uid}'ga yuborib bo'lmadi: {e}")
+
+
 def main():
     ensure_excel()
     seed_products_if_empty()
@@ -940,6 +1010,8 @@ def main():
     app.add_handler(MessageHandler(filters.Text([BTN_HISOBOT]), hisobot_start))
     app.add_handler(CommandHandler("hisobot", hisobot_start))
     app.add_handler(CallbackQueryHandler(hisobot_callback, pattern=r"^rep:"))
+    app.add_handler(MessageHandler(filters.Text([BTN_KAM_QOLDIQ]), kam_qoldiq_handler))
+    app.add_handler(CommandHandler("kam_qoldiq", kam_qoldiq_handler))
 
     app.add_handler(sotuv_conv)
     app.add_handler(xarajat_conv)
@@ -948,6 +1020,17 @@ def main():
     # Komandasiz, erkin matn bilan yozilgan sotuv/xarajatlarni tushunadigan handler.
     # Yuqoridagi conv handlerlar band bo'lmagan xabarlargagina ishlaydi.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
+
+    # Har kuni soat 21:00da (Toshkent vaqti bilan) avtomatik kunlik hisobot yuboriladi.
+    # Vaqtni o'zgartirish uchun Railway'da DAILY_REPORT_HOUR / DAILY_REPORT_MINUTE
+    # nomli environment variable'lar qo'shish mumkin.
+    if app.job_queue is not None:
+        hour = int(os.environ.get("DAILY_REPORT_HOUR", "21"))
+        minute = int(os.environ.get("DAILY_REPORT_MINUTE", "0"))
+        report_time = datetime.time(hour=hour, minute=minute, tzinfo=ZoneInfo("Asia/Tashkent"))
+        app.job_queue.run_daily(daily_report_job, time=report_time)
+    else:
+        print("OGOHLANTIRISH: job_queue mavjud emas — 'pip install \"python-telegram-bot[job-queue]\"' kerak.")
 
     print("Bot ishga tushdi...")
     app.run_polling()
