@@ -84,9 +84,9 @@ def is_allowed(update: Update) -> bool:
     return update.effective_user.id in ALLOWED_USERS
 
 # ConversationHandler holatlari
-MODEL_STEP, PRODUCT, QTY, PRICE = range(4)
-EXP_NAME, EXP_SUM = range(4, 6)
-NEW_NAME, NEW_QTY, NEW_PRICE = range(6, 9)
+MODEL_STEP, COLOR_STEP, PRODUCT, QTY, PRICE = range(5)
+EXP_NAME, EXP_SUM = range(5, 7)
+NEW_NAME, NEW_QTY, NEW_PRICE = range(7, 10)
 
 
 # ============ EXCEL YORDAMCHI FUNKSIYALAR ============
@@ -665,6 +665,8 @@ MENU_BUTTON_TEXTS = [
 ]
 FREE_TEXT_FILTER = filters.TEXT & ~filters.COMMAND & ~filters.Text(MENU_BUTTON_TEXTS)
 
+# Pastda doim ko'rinib turadigan asosiy menyu — jarayon davomida ham o'zgarmaydi,
+# shuning uchun istalgan payt boshqa amalga o'tish yoki orqaga qaytish mumkin.
 MAIN_MENU_ROWS = [
     [BTN_SOTUV, BTN_XARAJAT],
     [BTN_QOLDIK, BTN_MAHSULOT],
@@ -673,16 +675,10 @@ MAIN_MENU_ROWS = [
 ]
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_ROWS, resize_keyboard=True)
 
-# Har bir jarayon bosqichida shu tugmalar bilan birga ko'rsatiladigan klaviatura —
-# istalgan payt boshqa amalga o'tish yoki asosiy menyuga qaytish uchun.
-ORQAGA_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_ROWS + [[BTN_ORQAGA]], resize_keyboard=True)
 
-
-def with_orqaga(keyboard_rows):
-    """Berilgan tugmalar ro'yxatiga pastdan asosiy menyu va "Orqaga" qatorlarini qo'shib qaytaradi."""
-    return ReplyKeyboardMarkup(
-        keyboard_rows + MAIN_MENU_ROWS + [[BTN_ORQAGA]], resize_keyboard=True
-    )
+def inline_with_orqaga(buttons, back_callback):
+    """Inline tugmalar ro'yxatiga oxiriga "Orqaga" tugmasini qo'shib qaytaradi."""
+    return InlineKeyboardMarkup(buttons + [[InlineKeyboardButton(BTN_ORQAGA, callback_data=back_callback)]])
 
 
 # ============ /start ============
@@ -714,53 +710,68 @@ async def sotuv_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     used_models = [m for m in MODEL_DISPLAY_ORDER if any(n.startswith(m) for n in names)]
 
     if used_models:
-        keyboard = [[m] for m in used_models] + [[BTN_QOLDA_YOZISH]]
-        markup = with_orqaga(keyboard)
+        buttons = [[InlineKeyboardButton(m, callback_data=f"sm:{m}")] for m in used_models]
+        buttons.append([InlineKeyboardButton(BTN_QOLDA_YOZISH, callback_data="sm:manual")])
+        markup = inline_with_orqaga(buttons, "sm:back")
         await update.message.reply_text("Qaysi model sotildi?", reply_markup=markup)
         return MODEL_STEP
 
-    await update.message.reply_text(
-        "Qaysi mahsulot sotildi? (nomini yozing)", reply_markup=ORQAGA_MARKUP
-    )
+    await update.message.reply_text("Qaysi mahsulot sotildi? (nomini yozing)")
     return PRODUCT
 
 
-async def sotuv_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+async def sotuv_model_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return ConversationHandler.END
 
-    if text == BTN_QOLDA_YOZISH:
-        await update.message.reply_text(
-            "Mahsulot nomini yozing:", reply_markup=ORQAGA_MARKUP
-        )
+    data = query.data[len("sm:"):]
+    if data == "back":
+        await query.message.reply_text("Asosiy menyu.", reply_markup=MAIN_MENU_MARKUP)
+        return ConversationHandler.END
+    if data == "manual":
+        await query.message.reply_text("Mahsulot nomini yozing:")
         return PRODUCT
 
-    model = next((m for m in MODEL_DISPLAY_ORDER if m == text), None)
-    if model is None:
-        await update.message.reply_text("Iltimos, ro'yxatdan tanlang.")
-        return MODEL_STEP
-
+    model = data
     context.user_data["model"] = model
     names = get_product_names()
     colors = [n[len(model):].strip() for n in names if n.startswith(model)]
     colors = [c for c in colors if c]  # bo'sh bo'lmaganlari
 
     if colors:
-        keyboard = [[c] for c in colors]
-        markup = with_orqaga(keyboard)
-        await update.message.reply_text("Qaysi rang?", reply_markup=markup)
-        return PRODUCT
+        buttons = [[InlineKeyboardButton(c, callback_data=f"sc:{c}")] for c in colors]
+        markup = inline_with_orqaga(buttons, "sc:back")
+        await query.message.reply_text("Qaysi rang?", reply_markup=markup)
+        return COLOR_STEP
 
-    await update.message.reply_text(
-        "Rangini yozing:", reply_markup=ORQAGA_MARKUP
-    )
+    await query.message.reply_text("Rangini yozing:")
     return PRODUCT
+
+
+async def sotuv_color_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_allowed(update):
+        return ConversationHandler.END
+
+    data = query.data[len("sc:"):]
+    if data == "back":
+        await query.message.reply_text("Asosiy menyu.", reply_markup=MAIN_MENU_MARKUP)
+        return ConversationHandler.END
+
+    model = context.user_data.get("model")
+    context.user_data["mahsulot"] = f"{model} {data}" if model else data
+    await query.message.reply_text("Nechta dona sotildi?")
+    return QTY
 
 
 async def sotuv_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     model = context.user_data.get("model")
     context.user_data["mahsulot"] = f"{model} {text}" if model else text
-    await update.message.reply_text("Nechta dona sotildi?", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Nechta dona sotildi?")
     return QTY
 
 
@@ -768,11 +779,9 @@ async def sotuv_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data["miqdor"] = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text(
-            "Iltimos, faqat son kiriting. Nechta dona sotildi?", reply_markup=ORQAGA_MARKUP
-        )
+        await update.message.reply_text("Iltimos, faqat son kiriting. Nechta dona sotildi?")
         return QTY
-    await update.message.reply_text("Bir donasi necha so'mdan sotildi?", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Bir donasi necha so'mdan sotildi?")
     return PRICE
 
 
@@ -780,9 +789,7 @@ async def sotuv_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         narx = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text(
-            "Iltimos, faqat son kiriting. Narxi qancha?", reply_markup=ORQAGA_MARKUP
-        )
+        await update.message.reply_text("Iltimos, faqat son kiriting. Narxi qancha?")
         return PRICE
 
     mahsulot = context.user_data["mahsulot"]
@@ -807,13 +814,13 @@ async def xarajat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
         return ConversationHandler.END
-    await update.message.reply_text("Xarajat nimaga ketdi? (nomini yozing)", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Xarajat nimaga ketdi? (nomini yozing)")
     return EXP_NAME
 
 
 async def xarajat_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["exp_nomi"] = update.message.text.strip()
-    await update.message.reply_text("Summasi qancha?", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Summasi qancha?")
     return EXP_SUM
 
 
@@ -822,7 +829,7 @@ async def xarajat_sum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         summa = float(update.message.text.replace(",", "."))
     except ValueError:
         await update.message.reply_text(
-            "Iltimos, faqat son kiriting. Summasi qancha?", reply_markup=ORQAGA_MARKUP
+            "Iltimos, faqat son kiriting. Summasi qancha?"
         )
         return EXP_SUM
     xodim = xodim_ismi(update)
@@ -839,13 +846,13 @@ async def mahsulot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         await update.message.reply_text("Kechirasiz, sizda bu botdan foydalanishga ruxsat yo'q.")
         return ConversationHandler.END
-    await update.message.reply_text("Yangi mahsulot nomi?", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Yangi mahsulot nomi?")
     return NEW_NAME
 
 
 async def mahsulot_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["new_nomi"] = update.message.text.strip()
-    await update.message.reply_text("Boshlang'ich miqdori nechta?", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Boshlang'ich miqdori nechta?")
     return NEW_QTY
 
 
@@ -853,9 +860,9 @@ async def mahsulot_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data["new_qty"] = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("Iltimos, faqat son kiriting.", reply_markup=ORQAGA_MARKUP)
+        await update.message.reply_text("Iltimos, faqat son kiriting.")
         return NEW_QTY
-    await update.message.reply_text("Bir donasi necha so'mdan sotiladi?", reply_markup=ORQAGA_MARKUP)
+    await update.message.reply_text("Bir donasi necha so'mdan sotiladi?")
     return NEW_PRICE
 
 
@@ -863,7 +870,7 @@ async def mahsulot_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         narx = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("Iltimos, faqat son kiriting.", reply_markup=ORQAGA_MARKUP)
+        await update.message.reply_text("Iltimos, faqat son kiriting.")
         return NEW_PRICE
     add_product(context.user_data["new_nomi"], context.user_data["new_qty"], narx)
     await update.message.reply_text(
@@ -989,7 +996,7 @@ async def hisobot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "custom":
         context.user_data["awaiting_report_date"] = True
         await query.message.reply_text(
-            "Sanani yozing, masalan: 07.09 yoki 07.09.2026", reply_markup=ORQAGA_MARKUP
+            "Sanani yozing, masalan: 07.09 yoki 07.09.2026"
         )
         return
 
@@ -1012,7 +1019,6 @@ async def hisobot_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if sana is None:
         await update.message.reply_text(
             "Sanani tushunmadim. Masalan: 07.09 yoki 07.09.2026 deb yozing.",
-            reply_markup=ORQAGA_MARKUP,
         )
         return True
 
@@ -1064,7 +1070,8 @@ def main():
             MessageHandler(filters.Text([BTN_SOTUV]), sotuv_start),
         ],
         states={
-            MODEL_STEP: [MessageHandler(FREE_TEXT_FILTER, sotuv_model)],
+            MODEL_STEP: [CallbackQueryHandler(sotuv_model_cb, pattern=r"^sm:")],
+            COLOR_STEP: [CallbackQueryHandler(sotuv_color_cb, pattern=r"^sc:")],
             PRODUCT: [MessageHandler(FREE_TEXT_FILTER, sotuv_product)],
             QTY: [MessageHandler(FREE_TEXT_FILTER, sotuv_qty)],
             PRICE: [MessageHandler(FREE_TEXT_FILTER, sotuv_price)],
